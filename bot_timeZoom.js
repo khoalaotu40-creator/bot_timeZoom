@@ -144,34 +144,60 @@ async function initBot() {
         });
       }
     } else if (oldState.channelId && !newState.channelId) {
-      addLog(`User ${username} rời phòng: ${oldState.channel?.name || oldState.channelId}`, 'VOICE_LEAVE');
-      if (!supabase) return;
+        addLog(`User ${username} rời phòng: ${oldState.channel?.name || oldState.channelId}`, 'VOICE_LEAVE');
+        if (!supabase) return;
 
-      const { data: session } = await supabase
-        .from('voice_sessions')
-        .select('joined_at')
-        .eq('user_id', userId)
-        .maybeSingle();
+        const { data: session, error: fetchErr } = await supabase
+            .from('voice_sessions')
+            .select('joined_at')
+            .eq('user_id', userId)
+            .maybeSingle();
 
-      if (!session) return;
-      await supabase.from('voice_sessions').delete().eq('user_id', userId);
+        if (fetchErr) {
+            addLog(`Lỗi lấy session của ${username}: ${fetchErr.message}`, 'ERROR');
+            return;
+        }
 
-      const durationSeconds = Math.floor((Date.now() - new Date(session.joined_at).getTime()) / 1000);
-      if (durationSeconds < 5) return;
+        if (!session) {
+            addLog(`Không tìm thấy phiên bắt đầu của ${username}`, 'WARN');
+            return;
+        }
 
-      await supabase.rpc('add_voice_duration', { p_user_id: userId, p_seconds: durationSeconds });
+        // Xóa session
+        await supabase.from('voice_sessions').delete().eq('user_id', userId);
 
-      const channel = client.channels.cache.get(channelId);
-      if (channel) {
-        const mins = Math.floor(durationSeconds / 60);
-        const secs = durationSeconds % 60;
-        channel.send(`🔊 <@${userId}> đã rời phòng thoại. Thời gian: **${mins > 0 ? mins + ' phút ' : ''}${secs} giây**.`);
-      }
-    }
-  });
+        const durationSeconds = Math.floor((Date.now() - new Date(session.joined_at).getTime()) / 1000);
+        
+        // Bỏ qua nếu dưới 5 giây (missclick)
+        if (durationSeconds < 5) {
+            addLog(`User ${username} ở phòng dưới 5 giây (${durationSeconds}s) -> Bỏ qua`, 'INFO');
+            return;
+        }
 
-    addLog('Đang kết nối tới Discord Gateway...', 'INFO');
-    
+        // Lưu tổng thời gian
+        await supabase.rpc('add_voice_duration', { p_user_id: userId, p_seconds: durationSeconds });
+        addLog(`Đã ghi nhận +${durationSeconds}s cho user ${username}`, 'SUCCESS');
+
+        // GỬI TIN NHẮN THÔNG BÁO VỚI XỬ LÝ LỖI ĐẦY ĐỦ
+        try {
+            // Ưu tiên lấy từ cache, nếu không có thì fetch từ API Discord
+            const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
+
+            if (!channel) {
+            addLog(`Không tìm thấy text channel với ID: ${channelId} (Kiểm tra lại ID hoặc bot chưa ở server này)`, 'ERROR');
+            return;
+            }
+
+            const mins = Math.floor(durationSeconds / 60);
+            const secs = durationSeconds % 60;
+            const timeStr = `${mins > 0 ? mins + ' phút ' : ''}${secs} giây`;
+
+            await channel.send(`🔊 <@${userId}> đã rời phòng thoại. Thời gian: **${timeStr}**.`);
+            addLog(`Đã gửi thông báo thành công vào kênh #${channel.name}`, 'SUCCESS');
+        } catch (err) {
+            addLog(`Không thể gửi tin nhắn vào Discord: ${err.message}`, 'ERROR');
+        }
+        }
     const loginPromise = client.login(token);
     const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Hết thời gian chờ kết nối Gateway (Timeout sau 15s). Có thể do thiếu Intent hoặc IP Render bị hạn chế.')), 15000)

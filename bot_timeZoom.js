@@ -15,7 +15,7 @@ function addLog(message, type = 'INFO') {
   console.log(`[${timestamp}] [${type}] ${message}`);
 }
 
-// --- 2. MỞ HTTP SERVER NGAY LẬP TỨC ĐỂ GIỮ RENDER SỐNG ---
+// --- 2. MỞ HTTP SERVER GIỮ RENDER SỐNG ---
 const PORT = process.env.PORT || 3000;
 let botInstance = null;
 
@@ -81,12 +81,11 @@ http.createServer((req, res) => {
   res.end(html);
 }).listen(PORT, () => {
   addLog(`HTTP server debug đang mở tại port ${PORT}`, 'SERVER');
-  initBot(); // Gọi khởi động bot sau khi web server đã mở thành công
+  initBot();
 });
 
 // --- 3. HÀM KHỞI TẠO VÀ CHẠY BOT ---
 async function initBot() {
-  // Kiểm tra biến môi trường
   const token = process.env.DISCORD_TOKEN?.trim();
   const subUrl = process.env.SUPABASE_URL?.trim();
   const subKey = process.env.SUPABASE_KEY?.trim();
@@ -117,7 +116,6 @@ async function initBot() {
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildVoiceStates,
-      GatewayIntentBits.GuildMessages,
     ],
   });
   botInstance = client;
@@ -134,6 +132,7 @@ async function initBot() {
     const userId = newState.id;
     const username = newState.member?.user?.tag || userId;
 
+    // 1. Vào phòng thoại
     if (!oldState.channelId && newState.channelId) {
       addLog(`User ${username} vào phòng: ${newState.channel?.name || newState.channelId}`, 'VOICE_JOIN');
       if (supabase) {
@@ -143,69 +142,69 @@ async function initBot() {
           joined_at: new Date().toISOString(),
         });
       }
-    } else if (oldState.channelId && !newState.channelId) {
-        addLog(`User ${username} rời phòng: ${oldState.channel?.name || oldState.channelId}`, 'VOICE_LEAVE');
-        if (!supabase) return;
+    } 
+    // 2. Rời phòng thoại
+    else if (oldState.channelId && !newState.channelId) {
+      addLog(`User ${username} rời phòng: ${oldState.channel?.name || oldState.channelId}`, 'VOICE_LEAVE');
+      if (!supabase) return;
 
-        const { data: session, error: fetchErr } = await supabase
-            .from('voice_sessions')
-            .select('joined_at')
-            .eq('user_id', userId)
-            .maybeSingle();
+      const { data: session, error: fetchErr } = await supabase
+        .from('voice_sessions')
+        .select('joined_at')
+        .eq('user_id', userId)
+        .maybeSingle();
 
-        if (fetchErr) {
-            addLog(`Lỗi lấy session của ${username}: ${fetchErr.message}`, 'ERROR');
-            return;
+      if (fetchErr) {
+        addLog(`Lỗi lấy session của ${username}: ${fetchErr.message}`, 'ERROR');
+        return;
+      }
+
+      if (!session) {
+        addLog(`Không tìm thấy phiên bắt đầu của ${username}`, 'WARN');
+        return;
+      }
+
+      await supabase.from('voice_sessions').delete().eq('user_id', userId);
+
+      const durationSeconds = Math.floor((Date.now() - new Date(session.joined_at).getTime()) / 1000);
+      if (durationSeconds < 5) {
+        addLog(`User ${username} ở phòng dưới 5 giây (${durationSeconds}s) -> Bỏ qua`, 'INFO');
+        return;
+      }
+
+      await supabase.rpc('add_voice_duration', { p_user_id: userId, p_seconds: durationSeconds });
+      addLog(`Đã ghi nhận +${durationSeconds}s cho user ${username}`, 'SUCCESS');
+
+      try {
+        const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
+
+        if (!channel) {
+          addLog(`Không tìm thấy text channel với ID: ${channelId}`, 'ERROR');
+          return;
         }
 
-        if (!session) {
-            addLog(`Không tìm thấy phiên bắt đầu của ${username}`, 'WARN');
-            return;
-        }
+        const mins = Math.floor(durationSeconds / 60);
+        const secs = durationSeconds % 60;
+        const timeStr = `${mins > 0 ? mins + ' phút ' : ''}${secs} giây`;
 
-        // Xóa session
-        await supabase.from('voice_sessions').delete().eq('user_id', userId);
-
-        const durationSeconds = Math.floor((Date.now() - new Date(session.joined_at).getTime()) / 1000);
-        
-        // Bỏ qua nếu dưới 5 giây (missclick)
-        if (durationSeconds < 5) {
-            addLog(`User ${username} ở phòng dưới 5 giây (${durationSeconds}s) -> Bỏ qua`, 'INFO');
-            return;
-        }
-
-        // Lưu tổng thời gian
-        await supabase.rpc('add_voice_duration', { p_user_id: userId, p_seconds: durationSeconds });
-        addLog(`Đã ghi nhận +${durationSeconds}s cho user ${username}`, 'SUCCESS');
-
-        // GỬI TIN NHẮN THÔNG BÁO VỚI XỬ LÝ LỖI ĐẦY ĐỦ
-        try {
-            // Ưu tiên lấy từ cache, nếu không có thì fetch từ API Discord
-            const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
-
-            if (!channel) {
-            addLog(`Không tìm thấy text channel với ID: ${channelId} (Kiểm tra lại ID hoặc bot chưa ở server này)`, 'ERROR');
-            return;
-            }
-
-            const mins = Math.floor(durationSeconds / 60);
-            const secs = durationSeconds % 60;
-            const timeStr = `${mins > 0 ? mins + ' phút ' : ''}${secs} giây`;
-
-            await channel.send(`🔊 <@${userId}> đã rời phòng thoại. Thời gian: **${timeStr}**.`);
-            addLog(`Đã gửi thông báo thành công vào kênh #${channel.name}`, 'SUCCESS');
-        } catch (err) {
-            addLog(`Không thể gửi tin nhắn vào Discord: ${err.message}`, 'ERROR');
-        }
-        }
-    const loginPromise = client.login(token);
-    const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Hết thời gian chờ kết nối Gateway (Timeout sau 15s). Có thể do thiếu Intent hoặc IP Render bị hạn chế.')), 15000)
-    );
-
-    try {
-        await Promise.race([loginPromise, timeoutPromise]);
-    } catch (err) {
-        addLog(`Đăng nhập Discord thất bại: ${err.message}`, 'CRITICAL');
+        await channel.send(`🔊 <@${userId}> đã rời phòng thoại. Thời gian: **${timeStr}**.`);
+        addLog(`Đã gửi thông báo thành công vào kênh #${channel.name}`, 'SUCCESS');
+      } catch (err) {
+        addLog(`Không thể gửi tin nhắn vào Discord: ${err.message}`, 'ERROR');
+      }
     }
+  });
+
+  addLog('Đang kết nối tới Discord Gateway...', 'INFO');
+
+  const loginPromise = client.login(token);
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Hết thời gian chờ kết nối Gateway (Timeout sau 25s).')), 25000)
+  );
+
+  try {
+    await Promise.race([loginPromise, timeoutPromise]);
+  } catch (err) {
+    addLog(`Đăng nhập Discord thất bại: ${err.message}`, 'CRITICAL');
+  }
 }

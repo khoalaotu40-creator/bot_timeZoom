@@ -170,10 +170,16 @@ async function initBot() {
     }
   });
 
-  addLog('Đang kết nối tới Discord Gateway...', 'INFO');
-  try {
-    await client.login(token);
-  } catch (err) {
-    addLog(`Đăng nhập Discord thất bại: ${err.message}`, 'CRITICAL');
-  }
+    addLog('Đang kết nối tới Discord Gateway...', 'INFO');
+    
+    const loginPromise = client.login(token);
+    const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Hết thời gian chờ kết nối Gateway (Timeout sau 15s). Có thể do thiếu Intent hoặc IP Render bị hạn chế.')), 15000)
+    );
+
+    try {
+        await Promise.race([loginPromise, timeoutPromise]);
+    } catch (err) {
+        addLog(`Đăng nhập Discord thất bại: ${err.message}`, 'CRITICAL');
+    }
 }

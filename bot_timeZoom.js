@@ -82,4 +82,18 @@ client.once('clientReady', () => {
   console.log(`Bot đã online: ${client.user.tag}`);
 });
 
+
+
+
+
 client.login(process.env.DISCORD_TOKEN);
+
+const http = require('http');
+
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot Discord dang hoat dong 24/7!\n');
+}).listen(PORT, () => {
+  console.log(`HTTP server dang lang nghe tai port ${PORT}`);
+});

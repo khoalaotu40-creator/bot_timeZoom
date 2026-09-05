@@ -4,7 +4,9 @@
   "description": "",
   "main": "bot_timeZoom.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node bot_timeZoom.js",
+    "deploy": "powershell -Command \"Invoke-RestMethod -Uri 'https://api.render.com/deploy/srv-dadt156q1p3s73f30ung?key=gB9tYCSoXSc' -Method Post\""
   },
   "keywords": [],
   "author": "",
